@@ -1,0 +1,174 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Tank Online</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101827;color:white;font-family:Arial,sans-serif;overflow:hidden;touch-action:none;user-select:none}
+header{height:48px;background:#1e293b;display:flex;align-items:center;justify-content:space-between;padding:0 12px;font-weight:bold}
+#status{font-size:12px;color:#fbbf24}
+#game{display:block;width:100vw;height:calc(100dvh - 198px);min-height:180px;background:#172b24}
+#players{position:absolute;top:55px;left:8px;background:#0009;padding:7px;border-radius:8px;font-size:12px;pointer-events:none}
+#notice{position:absolute;top:48px;bottom:150px;left:0;right:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:25px;pointer-events:none;text-shadow:0 2px 4px black}
+#controls{height:150px;display:flex;align-items:center;justify-content:space-around;background:#111827}
+#joy{width:112px;height:112px;border-radius:50%;background:#ffffff20;border:2px solid #ffffff55;position:relative;touch-action:none}
+#knob{width:46px;height:46px;border-radius:50%;background:#94a3b8;position:absolute;left:31px;top:31px;pointer-events:none}
+#fire{width:88px;height:88px;border-radius:50%;border:3px solid #fecaca;background:#dc2626;color:white;font-weight:bold;touch-action:none}
+</style>
+</head>
+<body>
+<header>
+  <span>🛡️ TANK ONLINE</span>
+  <span id="status">Menghubungkan...</span>
+</header>
+<canvas id="game"></canvas>
+<div id="players">Menunggu pemain...</div>
+<div id="notice">Menghubungkan ke server...</div>
+<div id="controls">
+  <div id="joy"><div id="knob"></div></div>
+  <div style="font-size:11px;text-align:center;color:#cbd5e1">JOYSTICK<br>UNTUK BERGERAK</div>
+  <button id="fire">TEMBAK</button>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket=io();
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+const statusEl=document.getElementById("status");
+const playersEl=document.getElementById("players");
+const notice=document.getElementById("notice");
+const joy=document.getElementById("joy");
+const knob=document.getElementById("knob");
+const fireButton=document.getElementById("fire");
+
+let myId=null;
+let state={players:{},bullets:[],width:800,height:600};
+let moveX=0,moveY=0,angle=0,shooting=false,joyPointer=null;
+
+function resize(){
+  const r=canvas.getBoundingClientRect();
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  canvas.width=Math.round(r.width*dpr);
+  canvas.height=Math.round(r.height*dpr);
+}
+window.addEventListener("resize",resize);
+resize();
+
+socket.on("connect",()=>{
+  statusEl.textContent="Online";
+  statusEl.style.color="#86efac";
+  notice.textContent="Terhubung! Ajak teman membuka link yang sama.";
+});
+socket.on("disconnect",()=>{
+  statusEl.textContent="Terputus";
+  statusEl.style.color="#f87171";
+  notice.style.display="flex";
+  notice.textContent="Koneksi terputus. Mencoba kembali...";
+});
+socket.on("welcome",d=>myId=d.id);
+socket.on("full",()=>{
+  notice.style.display="flex";
+  notice.textContent="Arena penuh! Maksimal 5 pemain.";
+});
+socket.on("state",s=>{
+  state=s;
+  const list=Object.values(s.players||{});
+  playersEl.innerHTML="<b>Pemain ("+list.length+"/5)</b><br>"+
+    list.map(p=>(p.id===myId?"▶ ":"")+p.name+" — HP "+Math.max(0,p.hp)).join("<br>");
+  if(list.length)notice.style.display="none";
+  else{
+    notice.style.display="flex";
+    notice.textContent="Menunggu pemain...";
+  }
+});
+
+function sendInput(){
+  if(socket.connected)socket.emit("input",{x:moveX,y:moveY,angle,shooting});
+}
+setInterval(sendInput,33);
+
+function updateJoy(e){
+  const r=joy.getBoundingClientRect();
+  let dx=e.clientX-(r.left+r.width/2);
+  let dy=e.clientY-(r.top+r.height/2);
+  const max=33,len=Math.hypot(dx,dy);
+  if(len>max){dx=dx/len*max;dy=dy/len*max}
+  moveX=dx/max;moveY=dy/max;
+  if(Math.hypot(moveX,moveY)>0.15)angle=Math.atan2(moveY,moveX);
+  knob.style.left=(31+dx)+"px";
+  knob.style.top=(31+dy)+"px";
+}
+joy.addEventListener("pointerdown",e=>{
+  e.preventDefault();joyPointer=e.pointerId;
+  joy.setPointerCapture(e.pointerId);updateJoy(e);
+});
+joy.addEventListener("pointermove",e=>{
+  if(e.pointerId===joyPointer)updateJoy(e);
+});
+function stopJoy(e){
+  if(joyPointer!==null&&e.pointerId!==joyPointer)return;
+  joyPointer=null;moveX=0;moveY=0;
+  knob.style.left="31px";knob.style.top="31px";
+}
+joy.addEventListener("pointerup",stopJoy);
+joy.addEventListener("pointercancel",stopJoy);
+
+fireButton.addEventListener("pointerdown",e=>{
+  e.preventDefault();shooting=true;
+  fireButton.setPointerCapture(e.pointerId);
+});
+fireButton.addEventListener("pointerup",()=>shooting=false);
+fireButton.addEventListener("pointercancel",()=>shooting=false);
+fireButton.addEventListener("lostpointercapture",()=>shooting=false);
+
+function drawTank(p){
+  ctx.save();
+  ctx.translate(p.x,p.y);
+  ctx.rotate(p.angle||0);
+  ctx.fillStyle="#cbd5e1";ctx.fillRect(0,-5,30,10);
+  ctx.fillStyle=p.color;ctx.fillRect(-17,-14,34,28);
+  ctx.fillStyle="#1f2937";
+  ctx.fillRect(-19,-17,38,5);ctx.fillRect(-19,12,38,5);
+  ctx.fillStyle="#e2e8f0";
+  ctx.beginPath();ctx.arc(0,0,8,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+
+  ctx.textAlign="center";ctx.font="12px Arial";ctx.fillStyle="white";
+  ctx.fillText(p.name+(p.id===myId?" (Kamu)":""),p.x,p.y-28);
+  ctx.fillStyle="#7f1d1d";ctx.fillRect(p.x-20,p.y+23,40,5);
+  ctx.fillStyle="#4ade80";ctx.fillRect(p.x-20,p.y+23,40*Math.max(0,p.hp)/100,5);
+}
+
+function draw(){
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  const cw=canvas.width/dpr,ch=canvas.height/dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,cw,ch);
+
+  const W=state.width||800,H=state.height||600;
+  const scale=Math.min(cw/W,ch/H);
+  const ox=(cw-W*scale)/2,oy=(ch-H*scale)/2;
+
+  ctx.fillStyle="#172b24";ctx.fillRect(0,0,cw,ch);
+  ctx.save();ctx.translate(ox,oy);ctx.scale(scale,scale);
+  ctx.fillStyle="#264536";ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle="#ffffff0c";ctx.lineWidth=1;
+  for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}
+  for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}
+  ctx.strokeStyle="#94a3b8";ctx.lineWidth=8;ctx.strokeRect(4,4,W-8,H-8);
+
+  for(const b of(state.bullets||[])){
+    ctx.fillStyle="#fde047";ctx.beginPath();ctx.arc(b.x,b.y,5,0,Math.PI*2);ctx.fill();
+  }
+  for(const p of Object.values(state.players||{}))drawTank(p);
+  ctx.restore();
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
